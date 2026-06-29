@@ -1,0 +1,17 @@
+name: ChatGPT Write Probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm workflow write permission
+        run: |
+          echo "ChatGPT connector was able to create a workflow file."
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "SHA: $GITHUB_SHA"
