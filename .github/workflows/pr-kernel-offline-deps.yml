@@ -1,0 +1,103 @@
+name: pr-kernel-offline-deps
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Download missing Go modules
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p /tmp/kod/gomod
+          cd /tmp/kod/gomod
+          cat > go.mod <<'EOF'
+          module kernel_offline_missing_deps
+          go 1.25.0
+          require go.einride.tech/aip v0.86.3
+          EOF
+          cat > main.go <<'EOF'
+          package main
+          import (
+            _ "go.einride.tech/aip/fieldmask"
+            _ "go.einride.tech/aip/filtering"
+            _ "go.einride.tech/aip/ordering"
+            _ "go.einride.tech/aip/pagination"
+          )
+          func main() {}
+          EOF
+          go mod tidy
+          go mod download all
+          mkdir -p /tmp/kernel-offline-deps/goproxy-overlay
+          cp -a "$(go env GOPATH)/pkg/mod/cache/download/." /tmp/kernel-offline-deps/goproxy-overlay/
+          find /tmp/kernel-offline-deps/goproxy-overlay -name '*.lock' -delete
+
+      - name: Download Buf deps cache
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd /tmp/kod
+          curl -fsSL -o buf.tgz https://github.com/bufbuild/buf/releases/download/v1.71.0/buf-Linux-x86_64.tar.gz
+          mkdir -p buf-bin
+          tar -xzf buf.tgz -C buf-bin --strip-components=1
+          export PATH="$PWD/buf-bin/bin:$PATH"
+          export XDG_CACHE_HOME=/tmp/kod/xdg-cache
+          mkdir -p proto-root
+          cd proto-root
+          cat > buf.yaml <<'EOF'
+          version: v2
+          modules:
+            - path: .
+          deps:
+            - buf.build/googleapis/googleapis
+            - buf.build/grpc-ecosystem/grpc-gateway
+            - buf.build/bufbuild/protovalidate
+          lint:
+            use:
+              - DEFAULT
+          EOF
+          cat > dummy.proto <<'EOF'
+          syntax = "proto3";
+          package dummy.v1;
+          EOF
+          buf dep update
+          buf lint
+          mkdir -p /tmp/kernel-offline-deps/buf-cache
+          cp -a "$XDG_CACHE_HOME/buf/." /tmp/kernel-offline-deps/buf-cache/
+          cp -a buf.lock /tmp/kernel-offline-deps/buf.lock
+
+      - name: Pack artifact
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd /tmp/kernel-offline-deps
+          cat > MANIFEST.txt <<'EOF'
+          kernel offline dependency overlay
+          - goproxy-overlay: Go module proxy overlay for go.einride.tech/aip@v0.86.3
+          - buf-cache: Buf cache for googleapis, grpc-gateway, protovalidate
+          - buf.lock: generated dependency lock
+          EOF
+          tar -czf /tmp/kernel-offline-deps-overlay.tgz .
+          tar -tzf /tmp/kernel-offline-deps-overlay.tgz | sed -n '1,80p'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-offline-deps-overlay
+          path: /tmp/kernel-offline-deps-overlay.tgz
+          if-no-files-found: error
+          retention-days: 7
