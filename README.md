@@ -53,6 +53,16 @@ public-fetch-bundle.zip
 
 When no `go.mod` exists, `vendor.tgz` and `gomod-cache-download.tgz` are intentionally empty. Once a real Go project is committed, the workflow can package Go dependencies as well.
 
+## Kernel offline dependency overlay
+
+This repository is also used as a scratch build workspace for the Kernel sandbox demo. The workflow `.github/workflows/build-kernel-offline-deps.yml` builds:
+
+- a Go module proxy overlay for missing `go.einride.tech/aip@v0.86.3` layout dependencies;
+- a Buf remote module cache for `googleapis`, `grpc-gateway`, and `protovalidate`;
+- an apply script that merges the overlay into `/mnt/data/kernel-offline`.
+
+Trigger marker: 2026-06-30T00:00:00+02:00.
+
 ## Typical workflow
 
 1. Commit a Go project, or at least `go.mod` and `go.sum`.
