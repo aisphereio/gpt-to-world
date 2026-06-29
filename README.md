@@ -4,6 +4,8 @@
 
 It lets a restricted ChatGPT sandbox obtain public internet resources indirectly through GitHub Actions artifacts.
 
+> 中文完整说明：[`docs/sandbox-public-fetch-bridge.md`](docs/sandbox-public-fetch-bridge.md)
+
 ```text
 ChatGPT sandbox has no direct public network access
         ↓
