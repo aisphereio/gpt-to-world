@@ -1,0 +1,134 @@
+name: Public Fetch Probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  fetch-public-assets:
+    name: Fetch public assets and pack artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      BUF_VERSION: "1.71.0"
+      PROTOC_VERSION: "35.1"
+      GO_VERSION: "1.25.x"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare directories
+        run: |
+          set -euxo pipefail
+          mkdir -p downloads tools/bin tools/protoc reports offline
+
+          {
+            echo "repo=${GITHUB_REPOSITORY}"
+            echo "sha=${GITHUB_SHA}"
+            echo "ref=${GITHUB_REF}"
+            echo "runner_os=${RUNNER_OS}"
+            echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } | tee reports/context.txt
+
+      - name: Probe public internet
+        run: |
+          set -euxo pipefail
+
+          curl -fsSL https://api.github.com/repos/bufbuild/buf/releases/latest \
+            -o reports/buf-latest-release.json
+
+          curl -fsSL https://api.github.com/repos/protocolbuffers/protobuf/releases/latest \
+            -o reports/protobuf-latest-release.json
+
+          python3 - <<'PY' | tee reports/release-summary.txt
+          import json
+
+          for name, path in [
+              ("buf", "reports/buf-latest-release.json"),
+              ("protobuf", "reports/protobuf-latest-release.json"),
+          ]:
+              data = json.load(open(path, encoding="utf-8"))
+              print(f"{name}: {data.get('tag_name')} {data.get('html_url')}")
+          PY
+
+      - name: Download buf linux amd64
+        run: |
+          set -euxo pipefail
+
+          curl -fL \
+            "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/buf-Linux-x86_64" \
+            -o tools/bin/buf
+
+          chmod +x tools/bin/buf
+          tools/bin/buf --version | tee reports/buf-version.txt
+
+      - name: Download protoc linux amd64
+        run: |
+          set -euxo pipefail
+
+          curl -fL \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip" \
+            -o downloads/protoc-linux-x86_64.zip
+
+          unzip -q -o downloads/protoc-linux-x86_64.zip -d tools/protoc
+          tools/protoc/bin/protoc --version | tee reports/protoc-version.txt
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Download Go modules when go.mod exists
+        run: |
+          set -euxo pipefail
+
+          go version | tee reports/go-version.txt
+          go env GOPATH GOMODCACHE GOPROXY GOSUMDB | tee reports/go-env.txt
+
+          if [[ -f go.mod ]]; then
+            go mod download -x 2>&1 | tee reports/go-mod-download.log
+            go mod verify 2>&1 | tee reports/go-mod-verify.log
+
+            go mod vendor
+            tar -czf vendor.tgz vendor go.mod go.sum
+
+            mkdir -p offline/download
+            cp -a "$(go env GOPATH)/pkg/mod/cache/download/." offline/download/
+            tar -czf gomod-cache-download.tgz -C offline download
+          else
+            echo "go.mod not found; skip Go module download" | tee reports/go-mod-skip.txt
+            tar -czf vendor.tgz --files-from /dev/null
+            tar -czf gomod-cache-download.tgz --files-from /dev/null
+          fi
+
+      - name: Pack tools bundle
+        run: |
+          set -euxo pipefail
+
+          tar -czf linux-amd64-tools.tgz tools reports downloads
+          ls -lh *.tgz | tee reports/artifacts-list.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-fetch-bundle
+          path: |
+            linux-amd64-tools.tgz
+            vendor.tgz
+            gomod-cache-download.tgz
+            reports/**
+          retention-days: 7
+          if-no-files-found: error
