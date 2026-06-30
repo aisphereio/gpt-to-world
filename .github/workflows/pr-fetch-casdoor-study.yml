@@ -1,0 +1,68 @@
+name: pr-fetch-casdoor-study
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout Casdoor
+        uses: actions/checkout@v4
+        with:
+          repository: casdoor/casdoor
+          path: casdoor
+          fetch-depth: 1
+
+      - name: Build Casdoor study bundle
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out/reports out/slices
+          git -C casdoor rev-parse HEAD > out/reports/casdoor-commit.txt
+          git -C casdoor log -1 --oneline > out/reports/casdoor-last-commit.txt
+          find casdoor -maxdepth 3 -type d | sort > out/reports/casdoor-dirs.txt
+          find casdoor -maxdepth 3 -type f \( -name '*.go' -o -name '*.md' -o -name '*.json' -o -name '*.yaml' -o -name '*.yml' \) | sort > out/reports/casdoor-files.txt
+
+          mkdir -p out/slices/object out/slices/controllers out/slices/authz out/slices/util out/slices/routers
+          cp -a casdoor/object/*.go out/slices/object/ || true
+          cp -a casdoor/controllers/*.go out/slices/controllers/ || true
+          cp -a casdoor/authz/*.go out/slices/authz/ || true
+          cp -a casdoor/util/*.go out/slices/util/ || true
+          cp -a casdoor/routers/*.go out/slices/routers/ || true
+          cp -a casdoor/go.mod out/slices/go.mod || true
+          cp -a casdoor/go.sum out/slices/go.sum || true
+          cp -a casdoor/README.md out/slices/README.md || true
+          cp -a casdoor/LICENSE out/slices/LICENSE || true
+
+          cat > out/reports/STUDY_SCOPE.md <<'EOF'
+          # Casdoor study bundle for Kernel IAM
+
+          Scope:
+          - user model and account fields
+          - organization model and hierarchy concepts
+          - group / role / permission relationship
+          - OAuth/OIDC/token endpoints and login flow references
+          - provider/client separation ideas
+
+          Kernel decision:
+          - Casdoor source is a reference and external OAuth/user-center adapter.
+          - Kernel IAM must expose its own domain interfaces and not leak Casdoor object structs to business packages.
+          EOF
+
+          tar -czf casdoor-study-bundle.tgz -C out .
+          ls -lh casdoor-study-bundle.tgz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: casdoor-study-bundle
+          path: casdoor-study-bundle.tgz
+          if-no-files-found: error
+          retention-days: 7
