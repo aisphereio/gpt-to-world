@@ -1,0 +1,88 @@
+name: pr-fetch-k8s-apiserver
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout Kubernetes apiserver
+        uses: actions/checkout@v4
+        with:
+          repository: kubernetes/apiserver
+          path: apiserver
+          fetch-depth: 1
+
+      - name: Checkout Kubernetes apimachinery
+        uses: actions/checkout@v4
+        with:
+          repository: kubernetes/apimachinery
+          path: apimachinery
+          fetch-depth: 1
+
+      - name: Checkout Kubernetes kube-openapi
+        uses: actions/checkout@v4
+        with:
+          repository: kubernetes/kube-openapi
+          path: kube-openapi
+          fetch-depth: 1
+
+      - name: Build study bundle
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out/reports out/slices
+          for repo in apiserver apimachinery kube-openapi; do
+            git -C "$repo" rev-parse HEAD > "out/reports/${repo}-commit.txt"
+            git -C "$repo" log -1 --oneline > "out/reports/${repo}-last-commit.txt"
+            find "$repo" -maxdepth 3 -type d | sort > "out/reports/${repo}-dirs.txt"
+          done
+
+          mkdir -p out/slices/apiserver/pkg/server
+          cp -a apiserver/pkg/server/*.go out/slices/apiserver/pkg/server/ || true
+
+          mkdir -p out/slices/apiserver/pkg/endpoints
+          cp -a apiserver/pkg/endpoints/*.go out/slices/apiserver/pkg/endpoints/ || true
+          cp -a apiserver/pkg/endpoints/handlers out/slices/apiserver/pkg/endpoints/handlers || true
+          cp -a apiserver/pkg/endpoints/request out/slices/apiserver/pkg/endpoints/request || true
+          cp -a apiserver/pkg/endpoints/filters out/slices/apiserver/pkg/endpoints/filters || true
+
+          mkdir -p out/slices/apiserver/pkg/authorization out/slices/apiserver/pkg/authentication out/slices/apiserver/pkg/admission
+          cp -a apiserver/pkg/authorization out/slices/apiserver/pkg/ || true
+          cp -a apiserver/pkg/authentication out/slices/apiserver/pkg/ || true
+          cp -a apiserver/pkg/admission out/slices/apiserver/pkg/ || true
+
+          mkdir -p out/slices/apimachinery/pkg/runtime out/slices/apimachinery/pkg/apis/meta/v1 out/slices/apimachinery/pkg/util/validation
+          cp -a apimachinery/pkg/runtime/*.go out/slices/apimachinery/pkg/runtime/ || true
+          cp -a apimachinery/pkg/apis/meta/v1/*.go out/slices/apimachinery/pkg/apis/meta/v1/ || true
+          cp -a apimachinery/pkg/util/validation/*.go out/slices/apimachinery/pkg/util/validation/ || true
+
+          cat > out/reports/STUDY_SCOPE.md <<'EOF'
+          # Kubernetes apiserver study bundle
+
+          Scope for Kernel design study:
+          - generic server and delegation chain
+          - request context and filters
+          - authentication / authorization / admission layering
+          - REST handler and storage patterns
+          - API machinery: Scheme, Codec, ObjectMeta, validation/defaulting ideas
+          - generated OpenAPI / structured contract ideas
+          EOF
+
+          tar -czf k8s-apiserver-study-bundle.tgz -C out .
+          ls -lh k8s-apiserver-study-bundle.tgz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: k8s-apiserver-study-bundle
+          path: k8s-apiserver-study-bundle.tgz
+          if-no-files-found: error
+          retention-days: 7
