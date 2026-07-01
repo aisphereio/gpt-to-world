@@ -10,7 +10,7 @@ on:
       kernel_ref:
         description: 'Kernel branch, tag, or SHA'
         required: true
-        default: 'main'
+        default: 'v0.1.16'
       go_version:
         description: 'Go version used to build and verify Kernel'
         required: true
@@ -62,7 +62,7 @@ jobs:
       BRIDGE_DIR: ${{ github.workspace }}/bridge
       OUT_DIR: ${{ github.workspace }}/out/kernel-prod-env
       KERNEL_REPOSITORY: ${{ inputs.kernel_repository || 'aisphereio/kernel' }}
-      KERNEL_REF: ${{ inputs.kernel_ref || 'main' }}
+      KERNEL_REF: ${{ inputs.kernel_ref || 'v0.1.16' }}
       GO_VERSION: ${{ inputs.go_version || '1.25.8' }}
       GO_BUNDLE_VERSIONS: ${{ inputs.go_bundle_versions || '1.25.8,1.26.4' }}
       BUF_VERSION: ${{ inputs.buf_version || '1.50.0' }}
@@ -302,5 +302,5 @@ jobs:
         with:
           name: kernel-prod-env-${{ env.KERNEL_REF_SLUG }}-go${{ env.GO_VERSION }}
           path: ${{ env.OUT_DIR }}/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
