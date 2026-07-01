@@ -26,6 +26,7 @@ jobs:
           set -euxo pipefail
           mkdir -p /tmp/kernel-offline-build/gomod
           cd /tmp/kernel-offline-build/gomod
+
           cat > go.mod <<'EOF'
           module kernel-offline-missing-deps
 
@@ -33,6 +34,7 @@ jobs:
 
           require go.einride.tech/aip v0.86.3
           EOF
+
           cat > main.go <<'EOF'
           package main
 
@@ -45,8 +47,10 @@ jobs:
 
           func main() {}
           EOF
+
           go mod tidy
           go mod download all
+
           mkdir -p /tmp/kernel-offline-artifact/goproxy-overlay
           cp -a "$(go env GOPATH)/pkg/mod/cache/download/." /tmp/kernel-offline-artifact/goproxy-overlay/
           find /tmp/kernel-offline-artifact/goproxy-overlay -name '*.lock' -delete
@@ -56,13 +60,16 @@ jobs:
         run: |
           set -euxo pipefail
           cd /tmp/kernel-offline-build
+
           curl -fsSL -o buf.tgz https://github.com/bufbuild/buf/releases/download/v1.71.0/buf-Linux-x86_64.tar.gz
           mkdir -p buf-bin
           tar -xzf buf.tgz -C buf-bin --strip-components=1
           install -m 0755 buf-bin/bin/buf /usr/local/bin/buf
+
           export XDG_CACHE_HOME=/tmp/kernel-offline-build/xdg-cache
-          mkdir -p proto-root
+          mkdir -p proto-root/dummy/v1
           cd proto-root
+
           cat > buf.yaml <<'EOF'
           version: v2
           modules:
@@ -73,14 +80,48 @@ jobs:
             - buf.build/bufbuild/protovalidate
           lint:
             use:
-              - DEFAULT
+              - STANDARD
           EOF
-          cat > dummy.proto <<'EOF'
+
+          cat > dummy/v1/dummy.proto <<'EOF'
           syntax = "proto3";
+
           package dummy.v1;
+
+          import "buf/validate/validate.proto";
+          import "google/api/annotations.proto";
+          import "protoc-gen-openapiv2/options/annotations.proto";
+
+          option go_package = "example.com/dummy/v1;dummyv1";
+
+          option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_swagger) = {
+            info: {
+              title: "Dummy API"
+              version: "v1"
+            }
+          };
+
+          service DummyService {
+            rpc GetDummy(GetDummyRequest) returns (GetDummyResponse) {
+              option (google.api.http) = {
+                get: "/v1/dummy/{id}"
+              };
+            }
+          }
+
+          message GetDummyRequest {
+            string id = 1 [(buf.validate.field).string.min_len = 1];
+          }
+
+          message GetDummyResponse {
+            string id = 1;
+          }
           EOF
+
           buf dep update
           buf lint
+          buf build -o /tmp/kernel-offline-artifact/buf-cache-smoke.bin
+
           mkdir -p /tmp/kernel-offline-artifact/buf-cache
           cp -a "$XDG_CACHE_HOME/buf/." /tmp/kernel-offline-artifact/buf-cache/
           cp -a buf.lock /tmp/kernel-offline-artifact/buf.lock
@@ -90,6 +131,7 @@ jobs:
         run: |
           set -euxo pipefail
           cd /tmp/kernel-offline-artifact
+
           cat > apply-kernel-offline-deps.sh <<'EOF'
           #!/usr/bin/env bash
           set -euo pipefail
@@ -120,6 +162,7 @@ jobs:
           echo "applied kernel offline deps"
           echo "source /mnt/data/kernel-offline-env.sh"
           EOF
+
           chmod +x apply-kernel-offline-deps.sh
 
           cat > MANIFEST.txt <<'EOF'
@@ -129,6 +172,7 @@ jobs:
           - goproxy-overlay/: Go module proxy overlay, currently includes go.einride.tech/aip@v0.86.3 and transitive module cache entries.
           - buf-cache/: Buf remote module cache for googleapis, grpc-gateway, protovalidate.
           - buf.lock: lock generated from the declared deps.
+          - buf-cache-smoke.bin: descriptor build output proving the cached Buf deps are usable.
           - apply-kernel-offline-deps.sh: merges the overlay into /mnt/data/kernel-offline and writes /mnt/data/kernel-offline-env.sh.
           EOF
 
