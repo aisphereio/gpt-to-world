@@ -97,7 +97,6 @@ jobs:
             "$OUT_DIR/tools/linux-amd64/protoc" \
             "$OUT_DIR/scripts"
           cp "$BRIDGE_DIR/scripts/apply-kernel-prod-env.sh" "$OUT_DIR/scripts/"
-          cp "$BRIDGE_DIR/scripts/apply-kernel-prod-env.ps1" "$OUT_DIR/scripts/"
           chmod +x "$OUT_DIR/scripts/apply-kernel-prod-env.sh"
 
       - name: Record build context
