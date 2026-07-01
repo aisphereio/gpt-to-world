@@ -6,7 +6,7 @@ Current default target:
 
 ```text
 kernel_repository = aisphereio/kernel
-kernel_ref = v0.1.16
+kernel_ref = master
 go_version = 1.25.8
 go_bundle_versions = 1.25.8,1.26.4
 buf_version = 1.50.0
@@ -15,11 +15,11 @@ include_windows_amd64 = true
 run_validation = true
 ```
 
-Recommended manual run for the current Kernel release tag:
+Current note:
 
 ```text
-Actions -> build-kernel-prod-env -> Run workflow
-kernel_ref = v0.1.16
+Use master until the platformflow compile fix is tagged.
+After the next Kernel release tag is created, switch kernel_ref back to that tag.
 ```
 
 Artifact includes:
