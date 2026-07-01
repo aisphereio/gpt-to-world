@@ -225,22 +225,31 @@ jobs:
         run: |
           set -euxo pipefail
           cd "$KERNEL_DIR"
-          win_bin="$OUT_DIR/tools/windows-amd64/bin"
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOBIN="$win_bin" go install \
-            ./cmd/kernel \
-            ./cmd/protoc-gen-go-http \
-            ./cmd/protoc-gen-go-errors \
-            ./cmd/protoc-gen-go-authz \
-            ./cmd/protoc-gen-go-gateway \
-            ./cmd/protoc-gen-go-kernel \
-            ./cmd/buf-check-aisphere
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOBIN="$win_bin" go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOBIN="$win_bin" go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOBIN="$win_bin" go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@v2.29.0
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOBIN="$win_bin" go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@v2.29.0
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOBIN="$win_bin" go install github.com/google/wire/cmd/wire@v0.7.0
-          ls -lah "$win_bin" | tee "$OUT_DIR/reports/windows-tools.txt"
 
+          win_bin="$OUT_DIR/tools/windows-amd64/bin"
+          mkdir -p "$win_bin"
+
+          build_win_cmd() {
+            local pkg="$1"
+            local name="$2"
+            CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o "$win_bin/${name}.exe" "$pkg"
+          }
+
+          build_win_cmd ./cmd/kernel kernel
+          build_win_cmd ./cmd/protoc-gen-go-http protoc-gen-go-http
+          build_win_cmd ./cmd/protoc-gen-go-errors protoc-gen-go-errors
+          build_win_cmd ./cmd/protoc-gen-go-authz protoc-gen-go-authz
+          build_win_cmd ./cmd/protoc-gen-go-gateway protoc-gen-go-gateway
+          build_win_cmd ./cmd/protoc-gen-go-kernel protoc-gen-go-kernel
+          build_win_cmd ./cmd/buf-check-aisphere buf-check-aisphere
+
+          build_win_cmd google.golang.org/protobuf/cmd/protoc-gen-go protoc-gen-go
+          build_win_cmd google.golang.org/grpc/cmd/protoc-gen-go-grpc protoc-gen-go-grpc
+          build_win_cmd github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway protoc-gen-grpc-gateway
+          build_win_cmd github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2 protoc-gen-openapiv2
+          build_win_cmd github.com/google/wire/cmd/wire wire
+
+          ls -lah "$win_bin" | tee "$OUT_DIR/reports/windows-tools.txt"
       - name: Build Buf remote module cache
         run: |
           set -euxo pipefail
