@@ -1,0 +1,296 @@
+name: build-kernel-prod-env
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_repository:
+        description: 'Kernel repository to checkout, e.g. aisphereio/kernel'
+        required: true
+        default: 'aisphereio/kernel'
+      kernel_ref:
+        description: 'Kernel branch, tag, or SHA'
+        required: true
+        default: 'main'
+      go_version:
+        description: 'Go version used to build and verify Kernel'
+        required: true
+        default: '1.25.8'
+      go_bundle_versions:
+        description: 'Comma-separated Go binary archives to include in artifact'
+        required: true
+        default: '1.25.8,1.26.4'
+      buf_version:
+        description: 'Buf CLI version without v prefix'
+        required: true
+        default: '1.50.0'
+      protoc_version:
+        description: 'protoc version without v prefix'
+        required: true
+        default: '35.1'
+      include_windows_amd64:
+        description: 'Also build/download Windows amd64 tools'
+        required: true
+        type: boolean
+        default: true
+      run_validation:
+        description: 'Run targeted Kernel validation tests and proto smoke'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Kernel production offline env
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      KERNEL_DIR: ${{ github.workspace }}/kernel-src
+      BRIDGE_DIR: ${{ github.workspace }}/bridge
+      OUT_DIR: ${{ github.workspace }}/out/kernel-prod-env
+      GO_VERSION: ${{ inputs.go_version }}
+      GO_BUNDLE_VERSIONS: ${{ inputs.go_bundle_versions }}
+      BUF_VERSION: ${{ inputs.buf_version }}
+      PROTOC_VERSION: ${{ inputs.protoc_version }}
+      GOPROXY: https://proxy.golang.org,direct
+      GOSUMDB: sum.golang.org
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '0'
+
+    steps:
+      - name: Checkout bridge repository
+        uses: actions/checkout@v4
+        with:
+          path: bridge
+
+      - name: Checkout Kernel source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.kernel_repository }}
+          ref: ${{ inputs.kernel_ref }}
+          path: kernel-src
+
+      - name: Setup Go used by the builder
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go_version }}
+          cache: true
+          cache-dependency-path: |
+            kernel-src/go.sum
+            kernel-src/layout/go.sum
+
+      - name: Prepare output directories
+        run: |
+          set -euxo pipefail
+          mkdir -p \
+            "$OUT_DIR/go" \
+            "$OUT_DIR/raw" \
+            "$OUT_DIR/reports" \
+            "$OUT_DIR/checksums" \
+            "$OUT_DIR/tools/linux-amd64/bin" \
+            "$OUT_DIR/tools/linux-amd64/protoc" \
+            "$OUT_DIR/scripts"
+          cp "$BRIDGE_DIR/scripts/apply-kernel-prod-env.sh" "$OUT_DIR/scripts/"
+          cp "$BRIDGE_DIR/scripts/apply-kernel-prod-env.ps1" "$OUT_DIR/scripts/"
+          chmod +x "$OUT_DIR/scripts/apply-kernel-prod-env.sh"
+
+      - name: Record build context
+        run: |
+          set -euxo pipefail
+          {
+            echo "kernel_repository=${{ inputs.kernel_repository }}"
+            echo "kernel_ref=${{ inputs.kernel_ref }}"
+            echo "go_version=$GO_VERSION"
+            echo "go_bundle_versions=$GO_BUNDLE_VERSIONS"
+            echo "buf_version=$BUF_VERSION"
+            echo "protoc_version=$PROTOC_VERSION"
+            echo "runner_os=$(uname -a)"
+            echo "builder_go=$(go version)"
+            echo "workflow_sha=$GITHUB_SHA"
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } | tee "$OUT_DIR/reports/context.txt"
+          (cd "$KERNEL_DIR" && git rev-parse HEAD && git status --short) | tee "$OUT_DIR/reports/kernel-git.txt"
+          go env | tee "$OUT_DIR/reports/go-env.txt"
+
+      - name: Download Go binary archives
+        run: |
+          set -euxo pipefail
+          IFS=',' read -ra versions <<< "$GO_BUNDLE_VERSIONS"
+          for v in "${versions[@]}"; do
+            v="$(echo "$v" | xargs)"
+            [ -n "$v" ] || continue
+            curl -fL --retry 5 --retry-delay 3 \
+              -o "$OUT_DIR/go/go${v}.linux-amd64.tar.gz" \
+              "https://go.dev/dl/go${v}.linux-amd64.tar.gz"
+            if [ "${{ inputs.include_windows_amd64 }}" = "true" ]; then
+              curl -fL --retry 5 --retry-delay 3 \
+                -o "$OUT_DIR/go/go${v}.windows-amd64.zip" \
+                "https://go.dev/dl/go${v}.windows-amd64.zip"
+            fi
+          done
+
+      - name: Download and install protoc / buf for Linux amd64
+        run: |
+          set -euxo pipefail
+          mkdir -p /tmp/kernel-tools
+          curl -fL --retry 5 --retry-delay 3 \
+            -o "$OUT_DIR/raw/protoc-${PROTOC_VERSION}-linux-x86_64.zip" \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          unzip -q "$OUT_DIR/raw/protoc-${PROTOC_VERSION}-linux-x86_64.zip" -d /tmp/kernel-tools/protoc-linux
+          cp -R /tmp/kernel-tools/protoc-linux/. "$OUT_DIR/tools/linux-amd64/protoc/"
+          cp "$OUT_DIR/tools/linux-amd64/protoc/bin/protoc" "$OUT_DIR/tools/linux-amd64/bin/protoc"
+          chmod +x "$OUT_DIR/tools/linux-amd64/bin/protoc"
+
+          curl -fL --retry 5 --retry-delay 3 \
+            -o "$OUT_DIR/raw/buf-Linux-x86_64.tar.gz" \
+            "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/buf-Linux-x86_64.tar.gz"
+          mkdir -p /tmp/kernel-tools/buf-linux
+          tar -xzf "$OUT_DIR/raw/buf-Linux-x86_64.tar.gz" -C /tmp/kernel-tools/buf-linux
+          find /tmp/kernel-tools/buf-linux -type f -name buf -exec cp {} "$OUT_DIR/tools/linux-amd64/bin/buf" \;
+          chmod +x "$OUT_DIR/tools/linux-amd64/bin/buf"
+          PATH="$OUT_DIR/tools/linux-amd64/bin:$PATH" protoc --version | tee "$OUT_DIR/reports/protoc-version.txt"
+          PATH="$OUT_DIR/tools/linux-amd64/bin:$PATH" buf --version | tee "$OUT_DIR/reports/buf-version.txt"
+
+      - name: Download Windows amd64 protoc / buf archives
+        if: ${{ inputs.include_windows_amd64 }}
+        run: |
+          set -euxo pipefail
+          mkdir -p "$OUT_DIR/tools/windows-amd64/bin" "$OUT_DIR/tools/windows-amd64/protoc" /tmp/kernel-tools/protoc-windows /tmp/kernel-tools/buf-windows
+          curl -fL --retry 5 --retry-delay 3 \
+            -o "$OUT_DIR/raw/protoc-${PROTOC_VERSION}-win64.zip" \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-win64.zip"
+          unzip -q "$OUT_DIR/raw/protoc-${PROTOC_VERSION}-win64.zip" -d /tmp/kernel-tools/protoc-windows
+          cp -R /tmp/kernel-tools/protoc-windows/. "$OUT_DIR/tools/windows-amd64/protoc/"
+          cp "$OUT_DIR/tools/windows-amd64/protoc/bin/protoc.exe" "$OUT_DIR/tools/windows-amd64/bin/protoc.exe"
+
+          curl -fL --retry 5 --retry-delay 3 \
+            -o "$OUT_DIR/raw/buf-Windows-x86_64.zip" \
+            "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/buf-Windows-x86_64.zip"
+          unzip -q "$OUT_DIR/raw/buf-Windows-x86_64.zip" -d /tmp/kernel-tools/buf-windows
+          find /tmp/kernel-tools/buf-windows -type f -name buf.exe -exec cp {} "$OUT_DIR/tools/windows-amd64/bin/buf.exe" \;
+
+      - name: Download Kernel Go dependencies
+        run: |
+          set -euxo pipefail
+          cd "$KERNEL_DIR"
+          go version | tee "$OUT_DIR/reports/go-version.txt"
+          go mod download -json all > "$OUT_DIR/reports/go-mod-download-root.json"
+          go mod verify | tee "$OUT_DIR/reports/go-mod-verify-root.txt"
+          if [ -f layout/go.mod ]; then
+            (cd layout && go mod download -json all > "$OUT_DIR/reports/go-mod-download-layout.json")
+            (cd layout && go mod verify | tee "$OUT_DIR/reports/go-mod-verify-layout.txt")
+          fi
+
+      - name: Build Kernel tool binaries
+        run: |
+          set -euxo pipefail
+          cd "$KERNEL_DIR"
+          export PATH="$OUT_DIR/tools/linux-amd64/bin:$PATH"
+          linux_bin="$OUT_DIR/tools/linux-amd64/bin"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOBIN="$linux_bin" go install \
+            ./cmd/kernel \
+            ./cmd/protoc-gen-go-http \
+            ./cmd/protoc-gen-go-errors \
+            ./cmd/protoc-gen-go-authz \
+            ./cmd/protoc-gen-go-gateway \
+            ./cmd/protoc-gen-go-kernel \
+            ./cmd/buf-check-aisphere
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOBIN="$linux_bin" go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOBIN="$linux_bin" go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOBIN="$linux_bin" go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@v2.29.0
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOBIN="$linux_bin" go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@v2.29.0
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOBIN="$linux_bin" go install github.com/google/wire/cmd/wire@v0.7.0
+          ls -lah "$linux_bin" | tee "$OUT_DIR/reports/linux-tools.txt"
+          for f in "$linux_bin"/*; do "$f" --version >/dev/null 2>&1 || true; done
+
+      - name: Build Kernel Windows amd64 tool binaries
+        if: ${{ inputs.include_windows_amd64 }}
+        run: |
+          set -euxo pipefail
+          cd "$KERNEL_DIR"
+          win_bin="$OUT_DIR/tools/windows-amd64/bin"
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOBIN="$win_bin" go install \
+            ./cmd/kernel \
+            ./cmd/protoc-gen-go-http \
+            ./cmd/protoc-gen-go-errors \
+            ./cmd/protoc-gen-go-authz \
+            ./cmd/protoc-gen-go-gateway \
+            ./cmd/protoc-gen-go-kernel \
+            ./cmd/buf-check-aisphere
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOBIN="$win_bin" go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOBIN="$win_bin" go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOBIN="$win_bin" go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@v2.29.0
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOBIN="$win_bin" go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@v2.29.0
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOBIN="$win_bin" go install github.com/google/wire/cmd/wire@v0.7.0
+          ls -lah "$win_bin" | tee "$OUT_DIR/reports/windows-tools.txt"
+
+      - name: Build Buf remote module cache
+        run: |
+          set -euxo pipefail
+          cd "$KERNEL_DIR"
+          export PATH="$OUT_DIR/tools/linux-amd64/bin:$PATH"
+          export BUF_CACHE_DIR="$OUT_DIR/buf-cache"
+          mkdir -p "$BUF_CACHE_DIR"
+          buf dep update 2>&1 | tee "$OUT_DIR/reports/buf-dep-update-root.log"
+          buf build -o /tmp/kernel-root.bin 2>&1 | tee "$OUT_DIR/reports/buf-build-root.log"
+          if [ -f layout/buf.yaml ]; then
+            (cd layout && buf dep update 2>&1 | tee "$OUT_DIR/reports/buf-dep-update-layout.log")
+            (cd layout && buf build -o /tmp/kernel-layout.bin 2>&1 | tee "$OUT_DIR/reports/buf-build-layout.log")
+          fi
+
+      - name: Optional validation tests and proto smoke
+        if: ${{ inputs.run_validation }}
+        continue-on-error: true
+        run: |
+          set -euxo pipefail
+          cd "$KERNEL_DIR"
+          export PATH="$OUT_DIR/tools/linux-amd64/bin:$PATH"
+          go test ./serverx ./validation/iamgateway ./bootx ./requestx ./admissionx ./middleware/autowire ./ratelimitx ./clientpolicyx ./middleware/retry ./middleware/timeout -count=1 2>&1 | tee "$OUT_DIR/reports/targeted-tests.log"
+          go test ./cmd/protoc-gen-go-gateway ./cmd/protoc-gen-go-kernel ./gatewayx ./validation/platformflow -count=1 2>&1 | tee "$OUT_DIR/reports/platformflow-tests.log"
+          if [ -f layout/Makefile ]; then
+            (cd layout && PATH="$OUT_DIR/tools/linux-amd64/bin:$PATH" make check-tools proto-check) 2>&1 | tee "$OUT_DIR/reports/layout-proto-check.log"
+          fi
+
+      - name: Package caches, source, and toolchains
+        run: |
+          set -euxo pipefail
+          gomodcache="$(go env GOMODCACHE)"
+          gocache="$(go env GOCACHE)"
+          if [ -d "$gomodcache/cache/download" ]; then
+            tar -C "$gomodcache/cache/download" -czf "$OUT_DIR/goproxy-cache.tgz" .
+          else
+            mkdir -p /tmp/empty-goproxy && tar -C /tmp/empty-goproxy -czf "$OUT_DIR/goproxy-cache.tgz" .
+          fi
+          tar -C "$gomodcache" -czf "$OUT_DIR/gomod-cache.tgz" .
+          tar -C "$gocache" -czf "$OUT_DIR/gobuild-cache.tgz" . || true
+          tar -C "$OUT_DIR/buf-cache" -czf "$OUT_DIR/buf-cache.tgz" .
+          tar -C "$OUT_DIR/tools/linux-amd64" -czf "$OUT_DIR/tools-linux-amd64.tgz" .
+          if [ -d "$OUT_DIR/tools/windows-amd64" ]; then
+            (cd "$OUT_DIR/tools/windows-amd64" && zip -qr "$OUT_DIR/tools-windows-amd64.zip" .)
+          fi
+          tar --exclude='.git' -C "$KERNEL_DIR" -czf "$OUT_DIR/kernel-source.tgz" .
+          find "$OUT_DIR" -maxdepth 3 -type f | sort | sed "s#^$OUT_DIR/##" | tee "$OUT_DIR/reports/artifact-tree.txt"
+          (cd "$OUT_DIR" && find . -type f ! -path './checksums/*' -print0 | sort -z | xargs -0 sha256sum > checksums/SHA256SUMS)
+
+      - name: Compute artifact name
+        run: |
+          set -euxo pipefail
+          ref_slug="$(echo '${{ inputs.kernel_ref }}' | tr '/: @' '----' | tr -cd 'A-Za-z0-9._-')"
+          [ -n "$ref_slug" ] || ref_slug=kernel-ref
+          echo "KERNEL_REF_SLUG=$ref_slug" >> "$GITHUB_ENV"
+
+      - name: Upload production offline bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-prod-env-${{ env.KERNEL_REF_SLUG }}-go${{ inputs.go_version }}
+          path: ${{ env.OUT_DIR }}/
+          if-no-files-found: error
+          retention-days: 14
