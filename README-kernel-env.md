@@ -6,7 +6,7 @@ Current default target:
 
 ```text
 kernel_repository = aisphereio/kernel
-kernel_ref = main
+kernel_ref = v0.1.16
 go_version = 1.25.8
 go_bundle_versions = 1.25.8,1.26.4
 buf_version = 1.50.0
