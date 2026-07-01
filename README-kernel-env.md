@@ -25,7 +25,7 @@ After the next Kernel release tag is created, switch kernel_ref back to that tag
 Latest sandbox execution trigger:
 
 ```text
-2026-07-01T13:45:00+02:00
+2026-07-01T12:12:00+02:00 full kernel prod env requested
 ```
 
 Artifact includes:
@@ -46,8 +46,4 @@ checksums
 
 Linux usage after downloading and extracting the artifact:
 
-```bash
-bash scripts/apply-kernel-prod-env.sh "$PWD" /mnt/data/kernel-prod-env
-source /mnt/data/kernel-prod-env/env.sh
-/mnt/data/kernel-prod-env/verify.sh
-```
+See scripts/apply-kernel-prod-env.sh in the artifact.
