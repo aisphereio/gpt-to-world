@@ -25,7 +25,7 @@ After the next Kernel release tag is created, switch kernel_ref back to that tag
 Latest sandbox execution trigger:
 
 ```text
-2026-07-01T12:12:00+02:00 full kernel prod env requested
+2026-07-01T14:00:00+02:00
 ```
 
 Artifact includes:
