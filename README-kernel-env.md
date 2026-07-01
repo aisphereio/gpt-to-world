@@ -22,6 +22,12 @@ Use master until the platformflow compile fix is tagged.
 After the next Kernel release tag is created, switch kernel_ref back to that tag.
 ```
 
+Latest sandbox execution trigger:
+
+```text
+2026-07-01T13:45:00+02:00
+```
+
 Artifact includes:
 
 ```text
